@@ -31,4 +31,7 @@ test-results/
 *.sqlite3-wal
 *.sqlite3-shm
 *.sqlite3-journal
+
+# 本地运行时数据库（两个独立 SQLite 库，由应用启动时自动创建）
+/data/
 !*.traineddata.gz

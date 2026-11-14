@@ -1,0 +1,15 @@
+{
+  "name": "pointwise-delivery",
+  "version": "1.0.0",
+  "private": true,
+  "description": "事务发件箱 + 幂等投影的业务库到分析库同步演示",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node src/server.js",
+    "forwarder": "node src/forwarder.js",
+    "ingest": "node src/ingest.js"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

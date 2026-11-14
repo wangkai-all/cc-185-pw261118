@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>事务发件箱同步演示 · 业务库 → 分析库</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <header>
+    <h1>业务库 → 分析库同步演示</h1>
+    <p class="subtitle">
+      事务发件箱（Transactional Outbox）· 至少一次投递 · 幂等去重 · 版本守卫 ·
+      两个独立本地 SQLite 数据库
+    </p>
+  </header>
+
+  <!-- 进程与开关状态 -->
+  <section class="card">
+    <h2>运行状态</h2>
+    <div class="status-grid" id="status-grid">加载中…</div>
+  </section>
+
+  <!-- 操作区 -->
+  <section class="card">
+    <h2>操作</h2>
+    <div class="ops">
+      <form id="create-form" class="op-block">
+        <h3>① 创建订单（业务库同事务写订单 + 出站事件）</h3>
+        <label>客户名 <input name="customer" required placeholder="如：张三" /></label>
+        <label>金额 <input name="amount" type="number" step="0.01" min="0.01" required placeholder="100.00" /></label>
+        <label class="check"><input type="checkbox" name="simulateRollback" /> 模拟业务失败（事务回滚，事件不得留下）</label>
+        <button type="submit">创建订单</button>
+      </form>
+
+      <form id="mutate-form" class="op-block">
+        <h3>② 修改 / 撤销选中订单（版本递增）</h3>
+        <label>选中订单 <input name="orderId" id="selected-order" readonly placeholder="在下方订单表点“选择”" /></label>
+        <label>新金额 <input name="amount" type="number" step="0.01" min="0.01" placeholder="仅改金额时填写" /></label>
+        <div class="btn-row">
+          <button type="submit" name="action" value="amount">修改金额</button>
+          <button type="submit" name="action" value="cancel" class="warn">撤销订单</button>
+        </div>
+      </form>
+
+      <div class="op-block">
+        <h3>③ 转发与故障注入</h3>
+        <div class="btn-row wrap">
+          <button id="btn-pause">暂停转发</button>
+          <button id="btn-resume">恢复转发</button>
+          <button id="btn-restart" class="warn">重启消费者（转发器进程）</button>
+          <button id="btn-ackloss">模拟下一次确认丢失</button>
+          <button id="btn-ackloss-cancel">取消确认丢失</button>
+          <button id="btn-reset" class="danger">重置全部数据</button>
+        </div>
+        <p class="hint" id="control-hint"></p>
+      </div>
+
+      <div class="op-block">
+        <h3>④ 导出</h3>
+        <div class="btn-row wrap">
+          <a class="button" href="/api/export/backlog">导出积压（pending 事件 CSV）</a>
+          <a class="button" href="/api/export/conflicts">导出冲突（旧版本迟到 CSV）</a>
+          <a class="button" href="/api/export/correlation">导出关联追踪 CSV</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>业务库订单 <span class="db-tag">business.db · orders</span></h2>
+    <div class="table-wrap">
+      <table id="orders-table">
+        <thead><tr>
+          <th>订单 ID</th><th>客户</th><th>金额</th><th>状态</th><th>版本</th><th>更新时间</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>关联追踪：业务提交 → 发送尝试 → 分析结果
+      <span class="db-tag">outbox_events + dispatch_attempts → inbox_events</span>
+    </h2>
+    <div class="table-wrap">
+      <table id="corr-table">
+        <thead><tr>
+          <th>事件 ID</th><th>订单</th><th>类型</th><th>版本</th>
+          <th>出站状态</th><th>发送尝试</th><th>分析侧结果</th><th>创建时间</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>分析库投影 <span class="db-tag">analytics.db · projected_orders（页面只读）</span></h2>
+    <div class="table-wrap">
+      <table id="proj-table">
+        <thead><tr>
+          <th>订单 ID</th><th>客户</th><th>金额</th><th>状态</th><th>版本</th><th>更新时间</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>入站事件账本与冲突 <span class="db-tag">inbox_events / conflicts</span></h2>
+    <div class="two-col">
+      <div class="table-wrap">
+        <table id="inbox-table">
+          <thead><tr><th>event_id</th><th>订单</th><th>类型</th><th>版本</th><th>结果</th><th>接收时间</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <div class="table-wrap">
+        <table id="conflict-table">
+          <thead><tr><th>事件</th><th>订单</th><th>事件版本</th><th>当前版本</th><th>原因</th><th>时间</th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section class="card">
+    <h2>进程日志</h2>
+    <div class="two-col">
+      <div>
+        <h3>转发器 forwarder</h3>
+        <pre id="log-forwarder" class="log"></pre>
+      </div>
+      <div>
+        <h3>消费者 ingest</h3>
+        <pre id="log-ingest" class="log"></pre>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    数据流：网页 → web 进程（仅写 business.db）→ forwarder 进程（读 outbox，HTTP）→
+    ingest 进程（仅它写 analytics.db，事务内去重 + 版本守卫 + 投影更新）
+  </footer>
+
+  <div id="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
